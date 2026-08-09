@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+SQLAlchemy
+alembic
+pandas
+numpy
+yfinance
+python-dotenv
+pytest
+httpx
+google-generativeai
+gunicorn

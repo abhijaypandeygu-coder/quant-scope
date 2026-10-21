@@ -28,6 +28,15 @@ interface MicrostructureData {
   is_simulated: boolean;
 }
 
+function getCurrencySymbol(ticker: string): string {
+  const upper = ticker.toUpperCase();
+  if (upper.endsWith(".L")) return "£";
+  if (upper.endsWith(".T") || upper.endsWith(".JP")) return "¥";
+  if (upper.endsWith(".EU") || upper.endsWith(".DE") || upper.endsWith(".PA") || upper.endsWith(".AS")) return "€";
+  if (upper.endsWith(".HK")) return "HK$";
+  return "$";
+}
+
 export function Microstructure() {
   const [ticker, setTicker] = useState("AAPL");
   const [data, setData] = useState<MicrostructureData | null>(null);
@@ -150,13 +159,13 @@ export function Microstructure() {
               <div className="space-y-4">
                 <div>
                   <p className="text-sm text-muted-foreground">Mid Price</p>
-                  <p className="text-3xl font-bold">${data.mid_price.toFixed(2)}</p>
+                  <p className="text-3xl font-bold">{getCurrencySymbol(data.ticker)}{data.mid_price.toFixed(2)}</p>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                     <p className="text-xs text-muted-foreground mb-1">Spread</p>
-                    <p className="text-lg font-mono">${data.spread.toFixed(4)}</p>
+                    <p className="text-lg font-mono">{getCurrencySymbol(data.ticker)}{data.spread.toFixed(4)}</p>
                   </div>
                   <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                     <p className="text-xs text-muted-foreground mb-1">Spread Vol</p>
@@ -206,7 +215,7 @@ export function Microstructure() {
                 <div className="pt-4 border-t border-white/10">
                   <div className="flex justify-between items-center">
                     <p className="text-sm text-muted-foreground">Microprice</p>
-                    <p className="text-xl font-mono">${data.microprice.toFixed(3)}</p>
+                    <p className="text-xl font-mono">{getCurrencySymbol(data.ticker)}{data.microprice.toFixed(3)}</p>
                   </div>
                   <div className="flex justify-between items-center mt-1">
                     <p className="text-xs text-muted-foreground">vs Mid Price</p>
@@ -262,47 +271,111 @@ export function Microstructure() {
           <div className="lg:col-span-3 space-y-6">
             
             {/* Depth Chart */}
-            <div className="bg-card border border-white/10 rounded-xl p-4 shadow-sm h-48 flex items-end relative overflow-hidden">
-              <h3 className="absolute top-4 left-4 text-sm font-semibold text-muted-foreground">Order Book Depth</h3>
-              <svg className="w-full h-32" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <div className="bg-card border border-white/10 rounded-xl p-4 shadow-sm h-56 flex flex-col relative overflow-hidden">
+              <h3 className="text-sm font-semibold text-muted-foreground mb-2">Order Book Depth</h3>
+              <svg className="w-full flex-1" viewBox="0 0 200 100" preserveAspectRatio="none">
                 {(() => {
-                  // Build cumulative arrays
-                  const cumBids = [];
-                  let cB = 0;
-                  for (const b of data.bids) { cB += b.size; cumBids.push(cB); }
-                  
-                  const cumAsks = [];
-                  let cA = 0;
-                  for (const a of data.asks) { cA += a.size; cumAsks.push(cA); }
-                  
-                  const maxCum = Math.max(cumBids[cumBids.length-1] || 0, cumAsks[cumAsks.length-1] || 0);
-                  
-                  // Bids polygon (left side, from 50 to 0)
-                  const bidPoints = [[50, 100]];
-                  cumBids.forEach((vol, i) => {
-                    const x = 50 - (i / (data.bids.length || 1)) * 50;
-                    const y = 100 - (vol / (maxCum || 1)) * 100;
-                    bidPoints.push([x, y]);
-                  });
-                  bidPoints.push([0, 100]);
-                  
-                  // Asks polygon (right side, from 50 to 100)
-                  const askPoints = [[50, 100]];
-                  cumAsks.forEach((vol, i) => {
-                    const x = 50 + (i / (data.asks.length || 1)) * 50;
-                    const y = 100 - (vol / (maxCum || 1)) * 100;
-                    askPoints.push([x, y]);
-                  });
-                  askPoints.push([100, 100]);
+                  if (!data.bids.length || !data.asks.length) return null;
 
+                  // --- price range for X axis ---
+                  const minBidPrice = data.bids[data.bids.length - 1].price;
+                  const maxAskPrice = data.asks[data.asks.length - 1].price;
+                  const midPrice   = data.mid_price;
+                  const priceRange = Math.max(maxAskPrice - minBidPrice, 0.0001);
+
+                  const priceToX = (p: number) =>
+                    ((p - minBidPrice) / priceRange) * 200;
+
+                  // cumulative bid volumes (bids are sorted high→low price)
+                  const bidLevels: { price: number; cumVol: number }[] = [];
+                  let cumB = 0;
+                  for (const b of data.bids) {
+                    cumB += b.size;
+                    bidLevels.push({ price: b.price, cumVol: cumB });
+                  }
+                  // cumulative ask volumes (asks are sorted low→high price)
+                  const askLevels: { price: number; cumVol: number }[] = [];
+                  let cumA = 0;
+                  for (const a of data.asks) {
+                    cumA += a.size;
+                    askLevels.push({ price: a.price, cumVol: cumA });
+                  }
+
+                  const maxCum = Math.max(cumB, cumA, 1);
+                  const volToY = (v: number) => 100 - (v / maxCum) * 95;
+
+                  // bid polygon: step from right (mid) to left (lowest bid)
+                  // bids: price descending, cumVol ascending → X goes left
+                  const midX = priceToX(midPrice);
+                  const bidPts: string[] = [`${midX},100`];
+                  for (let i = 0; i < bidLevels.length; i++) {
+                    const x = priceToX(bidLevels[i].price);
+                    const y = volToY(bidLevels[i].cumVol);
+                    // step: vertical first then horizontal
+                    if (i === 0) {
+                      bidPts.push(`${midX},${y}`);
+                    } else {
+                      const prevX = priceToX(bidLevels[i - 1].price);
+                      bidPts.push(`${prevX},${y}`);
+                    }
+                    bidPts.push(`${x},${y}`);
+                  }
+                  bidPts.push(`${priceToX(minBidPrice)},100`);
+
+                  // ask polygon: step from left (mid) to right (highest ask)
+                  const askPts: string[] = [`${midX},100`];
+                  for (let i = 0; i < askLevels.length; i++) {
+                    const x = priceToX(askLevels[i].price);
+                    const y = volToY(askLevels[i].cumVol);
+                    if (i === 0) {
+                      askPts.push(`${midX},${y}`);
+                    } else {
+                      const prevX = priceToX(askLevels[i - 1].price);
+                      askPts.push(`${prevX},${y}`);
+                    }
+                    askPts.push(`${x},${y}`);
+                  }
+                  askPts.push(`${priceToX(maxAskPrice)},100`);
+
+                  // mid-price vertical line
                   return (
                     <>
-                      <polygon points={bidPoints.map(p => p.join(',')).join(' ')} fill="rgba(34, 197, 94, 0.2)" stroke="#22c55e" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                      <polygon points={askPoints.map(p => p.join(',')).join(' ')} fill="rgba(239, 68, 68, 0.2)" stroke="#ef4444" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                      {/* bid fill */}
+                      <polygon
+                        points={bidPts.join(' ')}
+                        fill="rgba(34,197,94,0.15)"
+                        stroke="#22c55e"
+                        strokeWidth="0.6"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      {/* ask fill */}
+                      <polygon
+                        points={askPts.join(' ')}
+                        fill="rgba(239,68,68,0.15)"
+                        stroke="#ef4444"
+                        strokeWidth="0.6"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      {/* mid-price line */}
+                      <line
+                        x1={midX} y1="0" x2={midX} y2="100"
+                        stroke="rgba(255,255,255,0.2)"
+                        strokeWidth="0.5"
+                        strokeDasharray="2,2"
+                        vectorEffect="non-scaling-stroke"
+                      />
                     </>
                   );
                 })()}
               </svg>
+              {/* Price labels */}
+              {data.bids.length > 0 && data.asks.length > 0 && (
+                <div className="flex justify-between text-[10px] text-muted-foreground mt-1 px-1">
+                  <span>{getCurrencySymbol(data.ticker)}{data.bids[data.bids.length - 1].price.toFixed(2)}</span>
+                  <span className="text-white/50">Mid {getCurrencySymbol(data.ticker)}{data.mid_price.toFixed(2)}</span>
+                  <span>{getCurrencySymbol(data.ticker)}{data.asks[data.asks.length - 1].price.toFixed(2)}</span>
+                </div>
+              )}
             </div>
 
             {/* Grid for L2 and Tape */}
